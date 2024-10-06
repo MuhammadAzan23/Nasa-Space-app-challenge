@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>NEO Solar System Visualization</title>
+    <style>
+        *{
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        #info {
+            position: absolute;
+            top: 0px;
+            left: 0px;
+            padding: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            z-index: 1;
+            background: rgba(0, 0, 0, 0.5);
+            /* padding: 10px; */
+            border-radius: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">
+        <h2>NEO Solar System Visualization</h2>
+        <p>Displaying NEOs from NASA API</p>
+    </div>
+    <!-- Include Three.js r128 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Include OrbitControls for camera manipulation -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Include Axios -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+        // Set up the scene, camera, and renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Add orbit controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // Add ambient light and point light (Sun)
+        const ambientLight = new THREE.AmbientLight(0x333333);
+        scene.add(ambientLight);
+
+        const pointLight = new THREE.PointLight(0xffffff, 2, 0); // Increased intensity
+        scene.add(pointLight);
+
+        // Create the Sun
+        const textureLoader = new THREE.TextureLoader();
+        const sunTexture = textureLoader.load('sun.jpeg'); // Local path to sun texture
+        const sunGeometry = new THREE.SphereGeometry(6, 32, 32); // Increased size from 2 to 4
+        // const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00 });
+        const sunMaterial = new THREE.MeshBasicMaterial({ map: sunTexture });
+        const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+        scene.add(sun);
+
+        // Position the camera
+        camera.position.set(0, 50, 100);
+
+        // Array to hold asteroid data and meshes
+        const asteroids = [];
+
+        // Function to convert orbital elements to 3D position (simplified)
+        function calculatePosition(a, e, i, w, node, angle) {
+            // Convert degrees to radians
+            const degToRad = Math.PI / 180;
+            i = parseFloat(i) * degToRad;
+            w = parseFloat(w) * degToRad;
+            node = parseFloat(node) * degToRad;
+
+            // Semi-major axis (a) in AU converted to a suitable scale
+            const scale = 20; // Increased scale for better visibility
+            a = parseFloat(a) * scale;
+
+            // Calculate the position in the orbital plane
+            const theta = angle; // Current angle in radians
+            const r = a * (1 - parseFloat(e)) / (1 + parseFloat(e) * Math.cos(theta));
+            const x_orb = r * Math.cos(theta);
+            const y_orb = r * Math.sin(theta);
+
+            // Rotate to 3D space
+            const cosO = Math.cos(node);
+            const sinO = Math.sin(node);
+            const cosI = Math.cos(i);
+            const sinI = Math.sin(i);
+            const cosW = Math.cos(w);
+            const sinW = Math.sin(w);
+
+            const x = (cosO * cosW - sinO * sinW * cosI) * x_orb + (-cosO * sinW - sinO * cosW * cosI) * y_orb;
+            const yPos = (sinO * cosW + cosO * sinW * cosI) * x_orb + (-sinO * sinW + cosO * cosW * cosI) * y_orb;
+            const z = (sinW * sinI) * x_orb + (cosW * sinI) * y_orb;
+
+            return new THREE.Vector3(x, z, yPos); // Adjust axes for better visualization
+        }
+
+        // Function to create orbits
+        function createOrbit(a, e, i, w, node) {
+            const points = [];
+            const degToRad = Math.PI / 180;
+            i = parseFloat(i) * degToRad;
+            w = parseFloat(w) * degToRad;
+            node = parseFloat(node) * degToRad;
+            a = parseFloat(a) * 20; // Increased scale from 10 to 20
+
+            const numPoints = 360; // More points for smoother orbit
+            for (let theta = 0; theta <= 2 * Math.PI; theta += (2 * Math.PI) / numPoints) {
+                const eValue = parseFloat(e);
+                const r = a * (1 - eValue) / (1 + eValue * Math.cos(theta));
+                let x_orb = r * Math.cos(theta);
+                let y_orb = r * Math.sin(theta);
+
+                // Rotate to 3D space
+                const cosO = Math.cos(node);
+                const sinO = Math.sin(node);
+                const cosI = Math.cos(i);
+                const sinI = Math.sin(i);
+                const cosW = Math.cos(w);
+                const sinW = Math.sin(w);
+
+                const x = (cosO * cosW - sinO * sinW * cosI) * x_orb + (-cosO * sinW - sinO * cosW * cosI) * y_orb;
+                const yPos = (sinO * cosW + cosO * sinW * cosI) * x_orb + (-sinO * sinW + cosO * cosW * cosI) * y_orb;
+                const z = (sinW * sinI) * x_orb + (cosW * sinI) * y_orb;
+
+                points.push(new THREE.Vector3(x, z, yPos));
+            }
+
+            const orbitGeometry = new THREE.BufferGeometry().setFromPoints(points);
+            const orbitMaterial = new THREE.LineBasicMaterial({ color: 0x888888 });
+            const orbit = new THREE.LineLoop(orbitGeometry, orbitMaterial);
+            scene.add(orbit);
+        }
+
+        // Fetch NEO data using Axios
+        axios.get('https://data.nasa.gov/resource/b67r-rgxc.json')
+            .then(response => {
+                const neos = response.data;
+                neos.forEach(neo => {
+                    // Extract necessary orbital elements
+                    const q_au_1 = parseFloat(neo.q_au_1) || 0;
+                    const q_au_2 = parseFloat(neo.q_au_2) || 0;
+                    const a = q_au_1 + q_au_2; // Approximate semi-major axis
+                    const e = parseFloat(neo.e) || 0;
+                    const i = parseFloat(neo.i_deg) || 0;
+                    const w = parseFloat(neo.w_deg) || 0;
+                    const node = parseFloat(neo.node_deg) || 0;
+                    const p_yr = parseFloat(neo.p_yr) || 1; // Orbital period in years
+
+                    // Create orbit path
+                    createOrbit(a, e, i, w, node);
+
+                    // Initial angle based on epoch and current date (simplified)
+                    // For more accurate positioning, more complex calculations are needed
+                    const initialAngle = Math.random() * 2 * Math.PI; // Random starting position
+
+                    // Create NEO sphere
+                    const neoGeometry = new THREE.SphereGeometry(0.5, 16, 16); // Increased size from 0.2 to 0.5
+                    const neoMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+                    const neoMesh = new THREE.Mesh(neoGeometry, neoMaterial);
+                    scene.add(neoMesh);
+
+                    // Store asteroid data
+                    asteroids.push({
+                        mesh: neoMesh,
+                        a: a,
+                        e: e,
+                        i: i,
+                        w: w,
+                        node: node,
+                        p_yr: p_yr,
+                        angle: initialAngle,
+                        rotationSpeed: Math.random() * 0.01 + 0.005 // Random spin speed
+                    });
+                });
+            })
+            .catch(error => {
+                console.error('Error fetching NEO data:', error);
+            });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            renderer.setSize(width, height);
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+        });
+
+        // Clock for timing
+        const clock = new THREE.Clock();
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            const delta = clock.getDelta(); // Time elapsed since last frame in seconds
+
+            // Update asteroid positions and rotations
+            asteroids.forEach(asteroid => {
+                // Update orbital position
+                if (asteroid.p_yr > 0) { // Prevent division by zero
+                    const angularSpeed = (2 * Math.PI) / (asteroid.p_yr * 365.25 * 24 * 3600); // radians per second
+                    asteroid.angle += angularSpeed * delta * 1000000; // Scaled for visualization
+                }
+                const newPosition = calculatePosition(asteroid.a, asteroid.e, asteroid.i, asteroid.w, asteroid.node, asteroid.angle);
+                asteroid.mesh.position.copy(newPosition);
+
+                // Rotate asteroid on its own axis
+                asteroid.mesh.rotation.x += asteroid.rotationSpeed;
+                asteroid.mesh.rotation.y += asteroid.rotationSpeed;
+            });
+
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+
+</html>
